@@ -5,6 +5,7 @@
          apply/5]).
 
 -define(RESOLUTION, 1000). %% us
+-define(DUMP_TIMEOUT, 30000). %% ms
 -record(dump, {stack=[], us=0, acc=[]}). % per-process state
 
 -define(DEFAULT_MODE, normal_with_children).
@@ -46,11 +47,14 @@ start_trace(Tracer, Target, Mode) ->
 
 stop_trace(Tracer, Target) ->
     erlang:trace(Target, false, [all]),
-    Tracer ! {dump_bytes, self()},
+    Tracer ! {dump, self()},
 
-    Ret = receive {bytes, B} -> {ok, B}
-    after 5000 -> {error, timeout}
-    end,
+    Ret =
+        receive
+            {stacks, Stacks} ->
+                {ok, stacks_to_bytes(Stacks)}
+        after ?DUMP_TIMEOUT -> {error, timeout}
+        end,
 
     exit(Tracer, normal),
     Ret.
@@ -69,7 +73,7 @@ trace_listener(State) ->
         {dump, Pid} ->
             Pid ! {stacks, dict:to_list(State)};
         {dump_bytes, Pid} ->
-            Bytes = iolist_to_binary([dump_to_iolist(TPid, Dump) || {TPid, [Dump]} <- dict:to_list(State)]),
+            Bytes = stacks_to_bytes(dict:to_list(State)),
             Pid ! {bytes, Bytes};
         Term ->
             trace_ts = element(1, Term),
@@ -86,6 +90,9 @@ trace_listener(State) ->
             D2 = dict:append(PidS, NewPidState, D1),
             trace_listener(D2)
     end.
+
+stacks_to_bytes(Stacks) ->
+    iolist_to_binary([dump_to_iolist(TPid, Dump) || {TPid, [Dump]} <- Stacks]).
 
 us({Mega, Secs, Micro}) ->
     Mega*1000*1000*1000*1000 + Secs*1000*1000 + Micro.
